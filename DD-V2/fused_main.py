@@ -9,6 +9,7 @@ import keras
 import keras_tuner as kt
 from keras_tuner.tuners import BayesianOptimization
 
+
 from sklearn.model_selection import train_test_split
 from skopt import BayesSearchCV
 from skopt.space import *
@@ -128,12 +129,13 @@ if __name__ == "__main__":
     )
 
     gpus = tf.config.list_physical_devices('GPU')
+    print(gpus)
     if gpus:    
         try:
             tf.config.set_logical_device_configuration(
                 device=gpus[0],
                 logical_devices=[
-                    tf.config.LogicalDeviceConfiguration(memory_limit=32000)
+                    tf.config.LogicalDeviceConfiguration(memory_limit=12000)
                 ],
             )
             logical_gpus = tf.config.list_logical_devices('GPU')
@@ -282,6 +284,77 @@ if __name__ == "__main__":
 
             with open(os.path.join(path_tuner, mlp_hp_name),'wb') as f:
                 pickle.dump(best_params, f)
+
+        elif run == 4:
+            #fix_data, fix_y_data, age = window_dataset_creation(n_steps, path, dataset_name_, True) 
+            import pprint
+
+            with open('best_model.pkl','rb') as f:
+                model_best = pickle.load(f)
+            
+            #with open('best_lstm.pkl','rb') as f:
+            #    model_lstm = pickle.load(f)
+            
+            #with open('best_scaler.pkl','rb') as f:
+            #    scaler_m = pickle.load(f)
+
+            #print(dir(scaler_m))
+            pprint.pp(model_best.__dict__)
+
+            #X_test, y_test, age_test = fix_data, np.argmax(fix_y_data, axis=1), age
+            #age_test = scaler_m.transform(age_test)
+
+            #X_test_data = np.hstack((model_lstm.predict(X_test), age_test))
+            #y_pred = model_best.predict(X_test_data)
+
+            #from sklearn.metrics import classification_report
+            #report = classification_report(y_test, y_pred)
+            #print(report)
+
+
+        elif run == 3:
+            #Creating windowed dataset for fused model with MLP head
+            fix_data, fix_y_data, age = window_dataset_creation(n_steps, path, dataset_name_, True) 
+            indices = np.arange(fix_data.shape[0])
+            train_idx, val_idx = train_test_split(indices, test_size=0.35)
+
+            X_train, y_train, age_t = fix_data[train_idx], fix_y_data[train_idx], age[train_idx]
+            X_val, y_val = fix_data[val_idx], fix_y_data[val_idx]
+            scaler_m = MinMaxScaler() 
+            age_t = scaler_m.fit_transform(age_t)
+
+            train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+            train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(batch_size)
+
+            val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
+            val_dataset = val_dataset.batch(batch_size)
+
+            #Training LSTM model with best hyperparameters
+            with open(os.path.join(path_tuner, hp_name),'rb') as f:
+                best_hps = pickle.load(f)
+
+            with open(os.path.join(path_tuner, mlp_hp_name),'rb') as f:
+                best_params = pickle.load(f)
+    
+            model_lstm = lstm_1d_deep(best_hps)
+            model_lstm.compile(optimizer=return_optimizer(best_hps), loss="binary_crossentropy", metrics=[tf.keras.metrics.AUC()])
+            model_lstm.fit(train_dataset, validation_data=(val_dataset), epochs=epoch_num)
+
+            X_train_data = np.hstack((model_lstm.predict(X_train), age_t))
+
+            model_clf = MLPClassifier()
+
+            model_best = model_clf.set_params(**best_params)
+            model_best.fit(X_train_data, np.argmax(y_train, axis=1))
+
+            with open('best_model.pkl','wb') as f:
+                pickle.dump(model_best, f)
+            
+            with open('best_lstm.pkl','wb') as f:
+                pickle.dump(model_lstm, f)
+            
+            with open('best_scaler.pkl','wb') as f:
+                pickle.dump(scaler_m, f)
 
         elif run == 2:
             #Creating windowed dataset for fused model with MLP head
